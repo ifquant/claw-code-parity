@@ -251,7 +251,7 @@ impl MessageStream {
             }
 
             if self.done {
-                self.pending.extend(self.state.finish()?);
+                self.pending.extend(self.state.finish());
                 if let Some(event) = self.pending.pop_front() {
                     return Ok(Some(event));
                 }
@@ -421,9 +421,9 @@ impl StreamState {
         events
     }
 
-    fn finish(&mut self) -> Result<Vec<StreamEvent>, ApiError> {
+    fn finish(&mut self) -> Vec<StreamEvent> {
         if self.message.finished {
-            return Ok(Vec::new());
+            return Vec::new();
         }
         self.message.finished = true;
 
@@ -472,7 +472,7 @@ impl StreamState {
             }));
             events.push(StreamEvent::MessageStop(MessageStopEvent {}));
         }
-        Ok(events)
+        events
     }
 }
 
