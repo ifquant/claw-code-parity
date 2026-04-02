@@ -879,7 +879,12 @@ fn cleanup_rotated_logs(path: &Path) -> Result<(), SessionError> {
             entry_path
                 .file_name()
                 .and_then(|value| value.to_str())
-                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".jsonl"))
+                .is_some_and(|name| {
+                    name.starts_with(&prefix)
+                        && Path::new(name)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+                })
         })
         .collect::<Vec<_>>();
 
