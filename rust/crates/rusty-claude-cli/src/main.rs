@@ -587,6 +587,9 @@ fn resolve_model_alias(model: &str) -> &str {
 }
 
 fn normalize_allowed_tools(values: &[String]) -> Result<Option<AllowedToolSet>, String> {
+    if values.is_empty() {
+        return Ok(None);
+    }
     current_tool_registry()?.normalize_allowed_tools(values)
 }
 
@@ -5318,8 +5321,65 @@ mod tests {
     }
     #[test]
     fn defaults_to_repl_when_no_args() {
+        let _guard = env_lock();
         assert_eq!(
             parse_args(&[]).expect("args should parse"),
+            CliAction::Repl {
+                model: DEFAULT_MODEL.to_string(),
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+            }
+        );
+    }
+
+    #[test]
+    fn defaults_to_repl_when_no_args_without_loading_plugin_registry() {
+        let _guard = env_lock();
+        let root = temp_dir();
+        let cwd = root.join("workspace");
+        let config_home = root.join("config-home");
+        let bundled_root = cwd.join("broken-bundled");
+        let plugin_root = bundled_root.join("broken-hooks");
+
+        std::fs::create_dir_all(plugin_root.join(".claude-plugin"))
+            .expect("broken bundled manifest dir should exist");
+        std::fs::create_dir_all(&config_home).expect("config home should exist");
+        std::fs::write(
+            plugin_root.join(".claude-plugin").join("plugin.json"),
+            r#"{
+  "name": "broken-hooks",
+  "version": "1.0.0",
+  "description": "broken bundled fixture",
+  "hooks": {
+    "PreToolUse": ["./hooks/pre.sh"]
+  }
+}"#,
+        )
+        .expect("broken bundled manifest should write");
+        std::fs::write(
+            config_home.join("settings.json"),
+            serde_json::json!({
+                "plugins": {
+                    "bundledRoot": "./broken-bundled"
+                }
+            })
+            .to_string(),
+        )
+        .expect("config should write");
+
+        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
+        std::env::set_var("CLAW_CONFIG_HOME", &config_home);
+
+        let action = with_current_dir(&cwd, || parse_args(&[]).expect("args should parse"));
+
+        match original_config_home {
+            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
+            None => std::env::remove_var("CLAW_CONFIG_HOME"),
+        }
+        std::fs::remove_dir_all(root).expect("temp config root should clean up");
+
+        assert_eq!(
+            action,
             CliAction::Repl {
                 model: DEFAULT_MODEL.to_string(),
                 allowed_tools: None,
@@ -5398,6 +5458,7 @@ mod tests {
 
     #[test]
     fn parses_prompt_subcommand() {
+        let _guard = env_lock();
         let args = vec![
             "prompt".to_string(),
             "hello".to_string(),
@@ -5417,6 +5478,7 @@ mod tests {
 
     #[test]
     fn parses_bare_prompt_and_json_output_flag() {
+        let _guard = env_lock();
         let args = vec![
             "--output-format=json".to_string(),
             "--model".to_string(),
@@ -5438,6 +5500,7 @@ mod tests {
 
     #[test]
     fn resolves_model_aliases_in_args() {
+        let _guard = env_lock();
         let args = vec![
             "--model".to_string(),
             "opus".to_string(),
@@ -5491,6 +5554,7 @@ mod tests {
 
     #[test]
     fn parses_allowed_tools_flags_with_aliases_and_lists() {
+        let _guard = env_lock();
         let args = vec![
             "--allowedTools".to_string(),
             "read,glob".to_string(),
@@ -5573,6 +5637,7 @@ mod tests {
 
     #[test]
     fn parses_single_word_command_aliases_without_falling_back_to_prompt_mode() {
+        let _guard = env_lock();
         assert_eq!(
             parse_args(&["help".to_string()]).expect("help should parse"),
             CliAction::Help
@@ -5603,6 +5668,7 @@ mod tests {
 
     #[test]
     fn multi_word_prompt_still_uses_shorthand_prompt_mode() {
+        let _guard = env_lock();
         assert_eq!(
             parse_args(&["help".to_string(), "me".to_string(), "debug".to_string()])
                 .expect("prompt shorthand should still work"),
