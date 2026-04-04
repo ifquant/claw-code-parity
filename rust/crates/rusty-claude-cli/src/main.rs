@@ -7296,6 +7296,55 @@ UU conflicted.rs",
     }
 
     #[test]
+    fn build_runtime_plugin_state_keeps_structured_config_hooks_and_plugin_hooks() {
+        let config_home = temp_dir();
+        let workspace = temp_dir();
+        let source_root = temp_dir();
+        fs::create_dir_all(&config_home).expect("config home");
+        fs::create_dir_all(workspace.join(".claw")).expect("workspace settings dir");
+        fs::create_dir_all(&source_root).expect("source root");
+        fs::write(
+            workspace.join(".claw").join("settings.json"),
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/hooks/pre-tool-use.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+        )
+        .expect("write workspace settings");
+        write_plugin_fixture(&source_root, "hook-runtime-demo", true, false);
+
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        manager
+            .install(source_root.to_str().expect("utf8 source path"))
+            .expect("plugin install should succeed");
+        let loader = ConfigLoader::new(&workspace, &config_home);
+        let runtime_config = loader.load().expect("runtime config should load");
+        let state = build_runtime_plugin_state_with_loader(&workspace, &loader, &runtime_config)
+            .expect("plugin state should load");
+        let pre_hooks = state.feature_config.hooks().pre_tool_use();
+        assert_eq!(pre_hooks.len(), 2);
+        assert_eq!(pre_hooks[0], "node ~/.claude/hooks/pre-tool-use.mjs");
+        assert!(
+            pre_hooks[1].ends_with("hooks/pre.sh"),
+            "expected installed plugin hook path, got {pre_hooks:?}"
+        );
+
+        let _ = fs::remove_dir_all(config_home);
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(source_root);
+    }
+
+    #[test]
     fn build_runtime_plugin_state_discovers_mcp_tools_and_surfaces_pending_servers() {
         let config_home = temp_dir();
         let workspace = temp_dir();

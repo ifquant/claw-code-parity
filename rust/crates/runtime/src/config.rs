@@ -622,11 +622,11 @@ fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig, Co
     };
     let hooks = expect_object(hooks_value, "merged settings.hooks")?;
     Ok(RuntimeHookConfig {
-        pre_tool_use: optional_string_array(hooks, "PreToolUse", "merged settings.hooks")?
+        pre_tool_use: optional_hook_command_array(hooks, "PreToolUse", "merged settings.hooks")?
             .unwrap_or_default(),
-        post_tool_use: optional_string_array(hooks, "PostToolUse", "merged settings.hooks")?
+        post_tool_use: optional_hook_command_array(hooks, "PostToolUse", "merged settings.hooks")?
             .unwrap_or_default(),
-        post_tool_use_failure: optional_string_array(
+        post_tool_use_failure: optional_hook_command_array(
             hooks,
             "PostToolUseFailure",
             "merged settings.hooks",
@@ -983,6 +983,83 @@ fn optional_string_array(
     }
 }
 
+fn optional_hook_command_array(
+    object: &BTreeMap<String, JsonValue>,
+    key: &str,
+    context: &str,
+) -> Result<Option<Vec<String>>, ConfigError> {
+    match object.get(key) {
+        Some(value) => {
+            let Some(array) = value.as_array() else {
+                return Err(ConfigError::Parse(format!(
+                    "{context}: field {key} must be an array"
+                )));
+            };
+            let mut commands = Vec::new();
+            for item in array {
+                append_hook_commands(item, &mut commands, key, context)?;
+            }
+            Ok(Some(commands))
+        }
+        None => Ok(None),
+    }
+}
+
+fn append_hook_commands(
+    value: &JsonValue,
+    commands: &mut Vec<String>,
+    key: &str,
+    context: &str,
+) -> Result<(), ConfigError> {
+    if let Some(command) = value.as_str() {
+        commands.push(command.to_string());
+        return Ok(());
+    }
+
+    let Some(object) = value.as_object() else {
+        return Err(ConfigError::Parse(format!(
+            "{context}: field {key} must contain only strings or simple command hook objects"
+        )));
+    };
+
+    if let Some(command) = object.get("command").and_then(JsonValue::as_str) {
+        commands.push(command.to_string());
+        return Ok(());
+    }
+
+    let Some(hooks) = object.get("hooks").and_then(JsonValue::as_array) else {
+        return Err(ConfigError::Parse(format!(
+            "{context}: field {key} must contain only strings or simple command hook objects"
+        )));
+    };
+
+    for hook in hooks {
+        let Some(hook_object) = hook.as_object() else {
+            return Err(ConfigError::Parse(format!(
+                "{context}: field {key} must contain only command hook objects"
+            )));
+        };
+        let Some(hook_type) = hook_object.get("type").and_then(JsonValue::as_str) else {
+            return Err(ConfigError::Parse(format!(
+                "{context}: field {key} command hook objects must include a string type"
+            )));
+        };
+        if hook_type != "command" {
+            return Err(ConfigError::Parse(format!(
+                "{context}: field {key} supports only command hook objects"
+            )));
+        }
+        let Some(command) = hook_object.get("command").and_then(JsonValue::as_str) else {
+            return Err(ConfigError::Parse(format!(
+                "{context}: field {key} command hook objects must include a string command"
+            )));
+        };
+        commands.push(command.to_string());
+    }
+
+    Ok(())
+}
+
 fn optional_string_map(
     object: &BTreeMap<String, JsonValue>,
     key: &str,
@@ -1164,6 +1241,52 @@ mod tests {
         assert_eq!(loaded.permission_rules().ask(), &["Edit".to_string()]);
         assert!(loaded.mcp().get("home").is_some());
         assert!(loaded.mcp().get("project").is_some());
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn loads_command_hooks_from_structured_hook_entries() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/hooks/pre-tool-use.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      "./hooks/post-tool-use.sh"
+    ]
+  }
+}"#,
+        )
+        .expect("write user settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+
+        assert_eq!(
+            loaded.hooks().pre_tool_use(),
+            &["node ~/.claude/hooks/pre-tool-use.mjs".to_string()]
+        );
+        assert_eq!(
+            loaded.hooks().post_tool_use(),
+            &["./hooks/post-tool-use.sh".to_string()]
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
